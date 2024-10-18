@@ -17,10 +17,11 @@ func New() *KVStore {
 	}
 }
 
-func (kv *KVStore) Set(key, value string) {
+func (kv *KVStore) Set(key, value string) error {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	kv.data[key] = value
+	return nil
 }
 
 func (kv *KVStore) Get(key string) (string, error) {

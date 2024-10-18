@@ -169,7 +169,7 @@ func runBenchmark(b *testing.B, numRecords int, timeout time.Duration) Benchmark
 }
 
 func BenchmarkKVStore(b *testing.B) {
-	sizes := []int{1000, 10000, 100000, 1000000}
+	sizes := []int{1000, 10000, 100000, 1000000, 1000000000}
 	results := make([]BenchmarkResult, len(sizes))
 	timeout := 10 * time.Minute // Set timeout to 10 minutes
 
