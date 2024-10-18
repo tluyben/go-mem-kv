@@ -1,18 +1,16 @@
 package kvstore
 
 import (
-	"flag"
 	"fmt"
 	"math/rand"
 	"runtime"
 	"sync"
-	"testing"
 	"time"
+
+	"github.com/gomodule/redigo/redis"
 )
 
-var timeoutSeconds = flag.Int("timeout", 600, "Timeout in seconds for each benchmark run")
-
-type BenchmarkResult struct {
+type RedisBenchmarkResult struct {
 	Size           int
 	ReadsPerSec    float64
 	WritesPerSec   float64
@@ -24,14 +22,23 @@ type BenchmarkResult struct {
 	OpsPerSec      float64
 	KBPerSec       float64
 	MemoryUsageMB  float64
-	Duration 	 time.Duration
+	Duration       time.Duration
 	Incomplete     bool
 }
 
 
-func runBenchmark(b *testing.B, numRecords int, timeout time.Duration) BenchmarkResult {
-	b.StopTimer()
-	store := New()
+func RunRedisBenchmark(address string, numRecords int, timeout time.Duration) RedisBenchmarkResult {
+	pool := &redis.Pool{
+		MaxIdle:     10,
+		IdleTimeout: 240 * time.Second,
+		Dial: func() (redis.Conn, error) {
+			return redis.Dial("tcp", address)
+		},
+	}
+
+	conn := pool.Get()
+	defer conn.Close()
+
 	keys := make([]string, numRecords)
 	values := make([]string, numRecords)
 
@@ -39,30 +46,34 @@ func runBenchmark(b *testing.B, numRecords int, timeout time.Duration) Benchmark
 	for i := 0; i < numRecords; i++ {
 		keys[i] = fmt.Sprintf("key:%d:%s", i, randString(5, 10))
 		values[i] = randString(50, 1000)
-		store.Set(keys[i], values[i])
+		_, err := conn.Do("SET", keys[i], values[i])
+		if err != nil {
+			fmt.Printf("Error setting key: %v\n", err)
+		}
 	}
 
 	hotKeys := keys[:numRecords/5]
 
-	b.StartTimer()
-
 	var wg sync.WaitGroup
-	var mu sync.Mutex
+	// var mu sync.Mutex
 	reads, writes, searches, scans, deletes, updates, exists := 0, 0, 0, 0, 0, 0, 0
 	totalBytes := 0
 
 	startTime := time.Now()
 	done := make(chan struct{})
 	timer := time.NewTimer(timeout)
-	
+
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			conn := pool.Get()
+			defer conn.Close()
+
 			localReads, localWrites, localSearches, localScans, localDeletes, localUpdates, localExists := 0, 0, 0, 0, 0, 0, 0
 			localBytes := 0
 
-			for j := 0; j < b.N/10; j++ {
+			for {
 				select {
 				case <-done:
 					return
@@ -79,47 +90,62 @@ func runBenchmark(b *testing.B, numRecords int, timeout time.Duration) Benchmark
 
 					switch {
 					case op < 0.45: // 45% reads
-						store.Get(key)
+						_, err := conn.Do("GET", key)
+						if err != nil {
+							fmt.Printf("Error reading key: %v\n", err)
+						}
 						localReads++
 					case op < 0.65: // 20% writes
 						value := randString(50, 1000)
-						store.Set(key, value)
+						_, err := conn.Do("SET", key, value)
+						if err != nil {
+							fmt.Printf("Error writing key: %v\n", err)
+						}
 						localWrites++
 						localBytes += len(key) + len(value)
 					case op < 0.75: // 10% searches
-						store.Keys()
+						_, err := conn.Do("KEYS", "*")
+						if err != nil {
+							fmt.Printf("Error searching keys: %v\n", err)
+						}
 						localSearches++
 					case op < 0.85: // 10% scans
-						cursor, _ := store.Scan(0, "key:*", 100, "")
-						for cursor != 0 {
-							cursor, _ = store.Scan(cursor, "key:*", 100, "")
+						cursor := 0
+						for {
+							values, err := redis.Values(conn.Do("SCAN", cursor))
+							if err != nil {
+								fmt.Printf("Error scanning: %v\n", err)
+								break
+							}
+							cursor, _ = redis.Int(values[0], nil)
+							if cursor == 0 {
+								break
+							}
 						}
 						localScans++
 					case op < 0.90: // 5% deletes
-						store.Del(key)
+						_, err := conn.Do("DEL", key)
+						if err != nil {
+							fmt.Printf("Error deleting key: %v\n", err)
+						}
 						localDeletes++
 					case op < 0.95: // 5% updates
 						value := randString(50, 1000)
-						store.Set(key, value)
+						_, err := conn.Do("SET", key, value)
+						if err != nil {
+							fmt.Printf("Error updating key: %v\n", err)
+						}
 						localUpdates++
 						localBytes += len(value)
 					default: // 5% exists
-						store.Exists(key)
+						_, err := conn.Do("EXISTS", key)
+						if err != nil {
+							fmt.Printf("Error checking key existence: %v\n", err)
+						}
 						localExists++
 					}
 				}
 			}
-
-			mu.Lock()
-			reads += localReads
-			writes += localWrites
-			searches += localSearches
-			scans += localScans
-			deletes += localDeletes
-			updates += localUpdates
-			exists += localExists
-			totalBytes += localBytes
-			mu.Unlock()
 		}()
 	}
 
@@ -141,7 +167,7 @@ func runBenchmark(b *testing.B, numRecords int, timeout time.Duration) Benchmark
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	return BenchmarkResult{
+	return RedisBenchmarkResult{
 		Size:           numRecords,
 		ReadsPerSec:    float64(reads) / duration.Seconds(),
 		WritesPerSec:   float64(writes) / duration.Seconds(),
@@ -155,41 +181,5 @@ func runBenchmark(b *testing.B, numRecords int, timeout time.Duration) Benchmark
 		MemoryUsageMB:  float64(m.Alloc) / (1024 * 1024),
 		Duration:       duration,
 		Incomplete:     incomplete,
-	}
-}
-
-func BenchmarkKVStore(b *testing.B) {
-	sizes := []int{1000, 10000, 500000}//, 100000, 1000000, 1000000000}
-	results := make([]BenchmarkResult, len(sizes))
-	timeout := time.Duration(*timeoutSeconds) * time.Second // Set timeout to 10 minutes
-
-	for i, size := range sizes {
-		b.Run(fmt.Sprintf("Size%d", size), func(b *testing.B) {
-			results[i] = runBenchmark(b, size, timeout)
-		})
-	}
-
-	// Print results in a tabular format
-	fmt.Println("| Size | Reads/s | Writes/s | Searches/s | Scans/s | Deletes/s | Updates/s | Exists/s | Ops/s | KB/s | Memory (MB) | Duration    | Status |")
-	fmt.Println("|------|---------|----------|------------|---------|-----------|-----------|----------|-------|------|-------------|-------------|--------|")
-	for _, result := range results {
-		status := "Complete"
-		if result.Incomplete {
-			status = "Incomplete"
-		}
-		fmt.Printf("| %d | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %d | %s |\n",
-			result.Size,
-			result.ReadsPerSec,
-			result.WritesPerSec,
-			result.SearchesPerSec,
-			result.ScansPerSec,
-			result.DeletesPerSec,
-			result.UpdatesPerSec,
-			result.ExistsPerSec,
-			result.OpsPerSec,
-			result.KBPerSec,
-			result.MemoryUsageMB,
-			int64(result.Duration / time.Millisecond),
-			status)
 	}
 }
