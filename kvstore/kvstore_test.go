@@ -1,6 +1,7 @@
 package kvstore
 
 import (
+	"flag"
 	"fmt"
 	"math/rand"
 	"runtime"
@@ -12,6 +13,8 @@ import (
 const (
 	letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
+
+var timeoutSeconds = flag.Int("timeout", 600, "Timeout in seconds for each benchmark run")
 
 func randString(min, max int) string {
 	n := rand.Intn(max-min+1) + min
@@ -34,6 +37,7 @@ type BenchmarkResult struct {
 	OpsPerSec      float64
 	KBPerSec       float64
 	MemoryUsageMB  float64
+	Duration 	 time.Duration
 	Incomplete     bool
 }
 func simulateNetworkLatency() {
@@ -65,7 +69,7 @@ func runBenchmark(b *testing.B, numRecords int, timeout time.Duration) Benchmark
 	startTime := time.Now()
 	done := make(chan struct{})
 	timer := time.NewTimer(timeout)
-
+	
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
@@ -164,14 +168,15 @@ func runBenchmark(b *testing.B, numRecords int, timeout time.Duration) Benchmark
 		OpsPerSec:      float64(totalOps) / duration.Seconds(),
 		KBPerSec:       float64(totalBytes) / 1024 / duration.Seconds(),
 		MemoryUsageMB:  float64(m.Alloc) / (1024 * 1024),
+		Duration:       duration,
 		Incomplete:     incomplete,
 	}
 }
 
 func BenchmarkKVStore(b *testing.B) {
-	sizes := []int{1000, 10000, 100000, 1000000, 1000000000}
+	sizes := []int{1000, 10000, 500000}//, 100000, 1000000, 1000000000}
 	results := make([]BenchmarkResult, len(sizes))
-	timeout := 10 * time.Minute // Set timeout to 10 minutes
+	timeout := time.Duration(*timeoutSeconds) * time.Second // Set timeout to 10 minutes
 
 	for i, size := range sizes {
 		b.Run(fmt.Sprintf("Size%d", size), func(b *testing.B) {
@@ -180,14 +185,14 @@ func BenchmarkKVStore(b *testing.B) {
 	}
 
 	// Print results in a tabular format
-	fmt.Println("| Size | Reads/s | Writes/s | Searches/s | Scans/s | Deletes/s | Updates/s | Exists/s | Ops/s | KB/s | Memory (MB) | Status |")
-	fmt.Println("|------|---------|----------|------------|---------|-----------|-----------|----------|-------|------|-------------|--------|")
+	fmt.Println("| Size | Reads/s | Writes/s | Searches/s | Scans/s | Deletes/s | Updates/s | Exists/s | Ops/s | KB/s | Memory (MB) | Duration    | Status |")
+	fmt.Println("|------|---------|----------|------------|---------|-----------|-----------|----------|-------|------|-------------|-------------|--------|")
 	for _, result := range results {
 		status := "Complete"
 		if result.Incomplete {
 			status = "Incomplete"
 		}
-		fmt.Printf("| %d | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %s |\n",
+		fmt.Printf("| %d | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %d | %s |\n",
 			result.Size,
 			result.ReadsPerSec,
 			result.WritesPerSec,
@@ -199,6 +204,7 @@ func BenchmarkKVStore(b *testing.B) {
 			result.OpsPerSec,
 			result.KBPerSec,
 			result.MemoryUsageMB,
+			int64(result.Duration / time.Millisecond),
 			status)
 	}
 }

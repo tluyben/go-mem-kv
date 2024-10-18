@@ -8,6 +8,6 @@ clean:
 	rm -f $(BINARY_NAME)
 test:
 	go test ./...
-benchmark:
-	go test -bench=. -benchmem ./kvstore/...
+benchmark: build
+	go test -bench=. -benchmem ./kvstore/... -args -timeout=${TIMEOUT}
 .PHONY: build run clean test
