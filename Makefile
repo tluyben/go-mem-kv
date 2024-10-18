@@ -8,4 +8,6 @@ clean:
 	rm -f $(BINARY_NAME)
 test:
 	go test ./...
+benchmark:
+	go test -bench=. -benchmem ./...
 .PHONY: build run clean test
