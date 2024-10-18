@@ -26,6 +26,7 @@ func main() {
 
 	// Start the server
 	fmt.Printf("Starting Redis-compatible server on port %d\n", *port)
+	fmt.Printf("Use 'telnet localhost %d' to connect\n", *port)
 	err := server.Start()
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)

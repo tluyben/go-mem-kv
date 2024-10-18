@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // KVStoreInterface defines the methods that our KV store must implement
@@ -61,6 +62,9 @@ func (s *RedisServer) handleConnection(conn net.Conn) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 
+	// Send initial prompt
+	conn.Write([]byte(fmt.Sprintf("%s:%d> ", conn.LocalAddr().(*net.TCPAddr).IP, s.port)))
+
 	for {
 		cmd, err := reader.ReadString('\n')
 		if err != nil {
@@ -69,11 +73,44 @@ func (s *RedisServer) handleConnection(conn net.Conn) {
 
 		response := s.handleCommand(strings.TrimSpace(cmd))
 		conn.Write([]byte(response))
+
+		// Send prompt after each command
+		conn.Write([]byte(fmt.Sprintf("%s:%d> ", conn.LocalAddr().(*net.TCPAddr).IP, s.port)))
 	}
+}
+func parseCommand(cmd string) []string {
+	var parts []string
+	var current string
+	inQuotes := false
+	escapeNext := false
+
+	for _, char := range cmd {
+		if escapeNext {
+			current += string(char)
+			escapeNext = false
+		} else if char == '\\' {
+			escapeNext = true
+		} else if char == '"' {
+			inQuotes = !inQuotes
+		} else if unicode.IsSpace(char) && !inQuotes {
+			if current != "" {
+				parts = append(parts, current)
+				current = ""
+			}
+		} else {
+			current += string(char)
+		}
+	}
+
+	if current != "" {
+		parts = append(parts, current)
+	}
+
+	return parts
 }
 
 func (s *RedisServer) handleCommand(cmd string) string {
-	parts := strings.Fields(cmd)
+	parts := parseCommand(cmd)
 	if len(parts) == 0 {
 		return "-ERR empty command\r\n"
 	}
