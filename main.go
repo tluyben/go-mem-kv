@@ -14,13 +14,20 @@ import (
 func main() {
 	// Define the port flag
 	port := flag.Int("port", 6379, "Port number to run the Redis-compatible server on")
-	redisTest := flag.String("redis-test", "", "Run Redis benchmark (format: localhost:port)")
+	redisTest := flag.String("redis-test", "", "Run Redis benchmark (format: localhost:port)")	
+	slowRedisTest := flag.String("slow-redis-test", "", "Run slow Redis compatibility test (format: localhost:port)")
 	flag.Parse()
 
 	if *redisTest != "" {
 		runRedisBenchmark(*redisTest)
 		return
 	}
+
+	if *slowRedisTest != "" {
+		kvstore.SlowRedisTest(*slowRedisTest)
+		return
+	}
+
 	// Set the REDIS_PORT environment variable
 	os.Setenv("REDIS_PORT", strconv.Itoa(*port))
 
